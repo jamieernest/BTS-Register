@@ -58,6 +58,13 @@ test('X-User header is ignored unless enabled', async () => {
   t.close();
 });
 
+test('a marshal session wins over X-User; a malformed cookie is just anonymous', async () => {
+  const x = await setup({ env: { TRUST_X_USER_HEADER: 'true' } });
+  assert.equal((await x.req('/marshal', { cookie: x.marshal, headers: { 'x-user': 'twjk20' } })).status, 200);
+  assert.notEqual((await x.req('/', { cookie: 'session=%' })).status, 500);
+  x.close();
+});
+
 test('dev mode is refused when NODE_ENV=production', () => {
   const env = { SESSION_SECRET: 'x'.repeat(20), PUBLIC_URL: 'https://r.test', DEV_MODE: 'true' };
   assert.throws(() => loadConfig({ ...env, NODE_ENV: 'production' }), /DEV_MODE/);

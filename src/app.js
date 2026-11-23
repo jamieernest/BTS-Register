@@ -38,16 +38,14 @@ export function createApp({ config, db, ldapLookup = null, cas, oidc, now = () =
     });
   const startSession = (res, user) => setCookie(res, 'session', user, config.sessionHours * 3600_000);
 
-  // Identity: optional X-User header (Traefik forwardAuth, opt-in) > signed session cookie.
+  // Identity: signed session cookie (so a Keycloak marshal stays a marshal) > optional X-User header (Traefik forwardAuth, opt-in).
   app.use((req, res, next) => {
     req.user = null;
-    if (config.trustXUser) {
+    const s = verify(readCookie(req, 'session'), config.sessionSecret, now().getTime());
+    if (s) req.user = { username: s.username, name: s.name, role: s.role };
+    else if (config.trustXUser) {
       const h = req.get('x-user');
       if (h && USER_RE.test(h.trim())) req.user = { username: h.trim().toLowerCase(), role: 'cast' };
-    }
-    if (!req.user) {
-      const s = verify(readCookie(req, 'session'), config.sessionSecret, now().getTime());
-      if (s) req.user = { username: s.username, name: s.name, role: s.role };
     }
     next();
   });
