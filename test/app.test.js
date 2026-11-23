@@ -1,13 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { setup, CAST_CSV } from './helpers.js';
+import { setup, CAST_CSV, fakeLdap } from './helpers.js';
+import { importCast, importShows } from '../src/csv.js';
 import { loadConfig } from '../src/config.js';
 import { validateTicket } from '../src/cas.js';
 
 async function seeded(opts) {
   const t = await setup(opts);
-  await t.post('/marshal/import/cast', { csv: CAST_CSV }, t.marshal);
-  await t.post('/marshal/import/shows', { csv: 'date,name,call_time\n2026-07-10,Opening,18:30\n' }, t.marshal);
+  await importCast(t.db, CAST_CSV, fakeLdap); // seed directly so a test's ldapLookup override only affects sign-in
+  importShows(t.db, 'date,name,call_time\n2026-07-10,Opening,18:30\n');
   return t;
 }
 const registered = (t) => t.db.prepare('SELECT COUNT(*) n FROM registrations').get().n;
@@ -106,5 +107,34 @@ test('CAS: callback sets the session cookie; validator parses success and failur
   const args = { casUrl: 'https://cas.test', service: 'https://r/cb', ticket: 'ST-1' };
   assert.equal(await validateTicket({ ...args, fetchImpl: xml("<cas:serviceResponse xmlns:cas='x'><cas:authenticationSuccess><cas:user>TWJK20</cas:user></cas:authenticationSuccess></cas:serviceResponse>") }), 'twjk20');
   await assert.rejects(validateTicket({ ...args, fetchImpl: xml("<cas:authenticationFailure code='INVALID_TICKET'/>") }));
+  t.close();
+});
+
+const signIn = async (t) => {
+  const r = await t.req('/cas/callback?ticket=good');
+  return r.headers.get('set-cookie').split(';')[0];
+};
+
+test('sign-in shows the LDAP display name and keeps it in the session (no re-query per page)', async () => {
+  let calls = 0;
+  const t = await seeded({ ldapLookup: async () => { calls++; return { name: 'Alice From Ldap' }; } });
+  const cookie = await signIn(t);
+  const home = await (await t.req('/', { cookie })).text();
+  assert.match(home, /Alice From Ldap/);
+  await t.post('/register', {}, cookie);
+  assert.match(await (await t.req('/', { cookie })).text(), /Alice From Ldap[\s\S]*registered|registered[\s\S]*Alice From Ldap/);
+  assert.equal(calls, 1);
+  t.close();
+});
+
+test('sign-in falls back to the cast-list name, then the username, when LDAP fails or has no name', async () => {
+  for (const ldapLookup of [async () => { throw new Error('down'); }, async () => ({ name: '' }), async () => null]) {
+    const t = await seeded({ ldapLookup });
+    const res = await t.req('/', { cookie: await signIn(t) });
+    assert.match(await res.text(), /Alice A/); // cast-list name
+    t.close();
+  }
+  const t = await setup({ ldapLookup: async () => { throw new Error('down'); } }); // not imported: username
+  assert.match(await (await t.req('/', { cookie: await signIn(t) })).text(), /twjk20/);
   t.close();
 });

@@ -65,7 +65,10 @@ export function createApp({ config, db, ldapLookup = null, cas, oidc, now = () =
     if (!ticket) return res.redirect('/login');
     try {
       const username = await cas.validate(`${config.publicUrl}/cas/callback`, ticket);
-      startSession(res, { username, name: castMember(username)?.name || username, role: 'cast' });
+      // Display name looked up once at sign-in and kept in the session; LDAP never blocks login.
+      const ldapName = await Promise.race([ldapLookup?.(username), new Promise((r) => setTimeout(r, 4000))])
+        .then((f) => f?.name, () => null);
+      startSession(res, { username, name: ldapName || castMember(username)?.name || username, role: 'cast' });
       res.redirect('/');
     } catch (e) {
       console.error('CAS login failed:', e.message);
@@ -118,16 +121,18 @@ export function createApp({ config, db, ldapLookup = null, cas, oidc, now = () =
     const date = today();
     const show = showOn(date);
     const member = castMember(user.username);
+    // Session name (from LDAP at sign-in) if it is a real name, else the cast-list name, else the username.
+    const shown = user.name && user.name !== user.username ? user.name : member?.name || user.username;
     if (!member) {
-      return [403, page('Not on the cast list', `<h1>Not on the cast list</h1><p><strong>${esc(user.username)}</strong> is not on the cast list for this show. Please see a fire marshal.</p>`, user)];
+      return [403, page('Not on the cast list', `<h1>Not on the cast list</h1><p><strong>${esc(shown)}</strong> (${esc(user.username)}) is not on the cast list for this show. Please see a fire marshal.</p>`, user)];
     }
     if (!show) {
-      return [200, page('No show today', `<h1>Hello ${esc(member.name)}</h1><p>There is no show today (${esc(date)}), so there is nothing to register for.</p>`, user)];
+      return [200, page('No show today', `<h1>Hello ${esc(shown)}</h1><p>There is no show today (${esc(date)}), so there is nothing to register for.</p>`, user)];
     }
     const reg = regOf(date, member.username);
     const body = reg
-      ? `<div class="ok"><h1>You're registered</h1><p>${esc(member.name)}, recorded at <strong>${esc(fmtTime(reg.registered_at))}</strong>.</p></div>`
-      : `<h1>Hello ${esc(member.name)}</h1><p>${showLabel(date, show)}</p><form method="post" action="/register"><button class="big">I'm here</button></form>`;
+      ? `<div class="ok"><h1>You're registered</h1><p>${esc(shown)}, recorded at <strong>${esc(fmtTime(reg.registered_at))}</strong>.</p></div>`
+      : `<h1>Hello ${esc(shown)}</h1><p>${showLabel(date, show)}</p><form method="post" action="/register"><button class="big">I'm here</button></form>`;
     return [200, page('Register', `${notice}${body}`, user)];
   };
 
