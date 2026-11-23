@@ -1,0 +1,19 @@
+{
+  "name": "bts-register",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Cast register for fire evacuation (CAS for cast, Keycloak for marshals)",
+  "type": "module",
+  "engines": {
+    "node": ">=22.5"
+  },
+  "scripts": {
+    "start": "node --env-file-if-exists=.env server.js",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "ldapts": "^9.3.1",
+    "openid-client": "^6.8.8"
+  }
+}
